@@ -146,6 +146,12 @@ def parse_args():
         default=1024,
         help="Default max tokens (used by Anthropic)",
     )
+    parser.add_argument(
+        "--cwd",
+        type=str,
+        default=None,
+        help="Working directory to run the session from",
+    )
     return parser.parse_args(), model_configs
 
 
@@ -181,6 +187,10 @@ async def run_agent(prompt: str) -> str:
 async def main():
     global PROVIDER
     args, model_configs = parse_args()
+    if args.cwd is not None:
+        if not os.path.isdir(args.cwd):
+            raise SystemExit(f"--cwd path does not exist or is not a directory: {args.cwd}")
+        os.chdir(args.cwd)
     cwd = os.getcwd()
     console.print(
         Panel.fit(
