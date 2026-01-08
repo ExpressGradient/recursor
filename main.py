@@ -1,17 +1,52 @@
 import asyncio
 import os
+import subprocess
+import sys
 
 import kosong
 from kosong.contrib.chat_provider.openai_responses import OpenAIResponses
 from kosong.message import Message
-from kosong.tooling.empty import EmptyToolset
+from kosong.tooling import CallableTool2, ToolError, ToolOk, ToolReturnValue
+from kosong.tooling.simple import SimpleToolset
+from pydantic import BaseModel
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.panel import Panel
-from rich.prompt import Prompt
 
 console = Console()
+
+
+class RunPythonParams(BaseModel):
+    code: str
+    one_line_description: str
+
+
+class RunPythonTool(CallableTool2[RunPythonParams]):
+    name = "run_python"
+    description = "Run a short Python snippet and return stdout/stderr."
+    params = RunPythonParams
+
+    async def __call__(self, params: RunPythonParams) -> ToolReturnValue:
+        def run():
+            return subprocess.run(
+                [sys.executable, "-c", params.code],
+                capture_output=True,
+                text=True,
+            )
+
+        result = await asyncio.to_thread(run)
+        stdout_text = (result.stdout or "").strip()
+        stderr_text = (result.stderr or "").strip()
+
+        if result.returncode != 0:
+            return ToolError(
+                message=f"Python exited with code {result.returncode}",
+                brief="Python error",
+                output=stderr_text or stdout_text or "(no error output)",
+            )
+
+        return ToolOk(output=stdout_text or "(no output)")
 
 
 async def main():
@@ -29,12 +64,11 @@ async def main():
     )
 
     openai = OpenAIResponses(model="gpt-5.1-codex")
-    toolset = EmptyToolset()
+    toolset = SimpleToolset([RunPythonTool()])
     history = []
 
     while True:
-        Prompt.prompt_suffix = ""
-        user_message = Prompt.ask("> ", console=console)
+        user_message = console.input("[bold black on bright_cyan] recursor [/]> ")
 
         if user_message == "quit":
             console.print("Goodbye [italic]sad computer making shutdown noises...")
