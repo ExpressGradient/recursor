@@ -1,9 +1,12 @@
+import argparse
 import asyncio
 import os
 import subprocess
 import sys
 
 import kosong
+from kosong.contrib.chat_provider.anthropic import Anthropic
+from kosong.contrib.chat_provider.google_genai import GoogleGenAI
 from kosong.contrib.chat_provider.openai_responses import OpenAIResponses
 from kosong.message import Message
 from kosong.tooling import CallableTool2, ToolError, ToolOk, ToolReturnValue
@@ -49,13 +52,49 @@ class RunPythonTool(CallableTool2[RunPythonParams]):
         return ToolOk(output=stdout_text or "(no output)")
 
 
+def parse_args():
+    model_configs = {
+        "claude-opus-4-5": (
+            Anthropic,
+            {},
+        ),
+        "gemini-3-pro-preview": (
+            GoogleGenAI,
+            {},
+        ),
+        "gpt-5.1-codex-max": (
+            OpenAIResponses,
+            {},
+        ),
+        "gpt-5.2": (
+            OpenAIResponses,
+            {},
+        ),
+    }
+    parser = argparse.ArgumentParser(description="Recursor")
+    parser.add_argument(
+        "--model",
+        choices=list(model_configs.keys()),
+        default="gpt-5.1-codex-max",
+        help="Model to use",
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=1024,
+        help="Default max tokens (used by Anthropic)",
+    )
+    return parser.parse_args(), model_configs
+
+
 async def main():
+    args, model_configs = parse_args()
     cwd = os.getcwd()
     console.print(
         Panel.fit(
             Markdown(
                 f"**Recursor**\n"
-                f"- Model: `gpt-5.1-codex`\n"
+                f"- Model: `{args.model}`\n"
                 f"- Directory: `{cwd}`\n"
                 f"- Tip: type `quit` to exit"
             ),
@@ -63,7 +102,11 @@ async def main():
         )
     )
 
-    openai = OpenAIResponses(model="gpt-5.1-codex")
+    provider_cls, provider_kwargs = model_configs[args.model]
+    if provider_cls is Anthropic:
+        provider_kwargs = {**provider_kwargs, "default_max_tokens": args.max_tokens}
+    provider = provider_cls(model=args.model, **provider_kwargs)
+
     toolset = SimpleToolset([RunPythonTool()])
     history = []
 
@@ -77,7 +120,7 @@ async def main():
         history.append(Message(role="user", content=user_message))
 
         while True:
-            result = await kosong.step(openai, "", toolset, history)
+            result = await kosong.step(provider, "", toolset, history)
             history.append(result.message)
             tool_results = await result.tool_results()
 
