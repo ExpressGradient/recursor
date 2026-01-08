@@ -76,8 +76,24 @@ async def main():
 
         history.append(Message(role="user", content=user_message))
 
-        result = await kosong.step(openai, "", toolset, history)
-        console.print(Padding(Markdown(result.message.extract_text()), 1))
+        while True:
+            result = await kosong.step(openai, "", toolset, history)
+            history.append(result.message)
+            tool_results = await result.tool_results()
+
+            if len(tool_results) == 0:
+                console.print(Padding(Markdown(result.message.extract_text()), 1))
+                break
+
+            tool_messages = [
+                Message(
+                    role="tool",
+                    content=tool_result.return_value.output,
+                    tool_call_id=tool_result.tool_call_id,
+                )
+                for tool_result in tool_results
+            ]
+            history.extend(tool_messages)
 
 
 asyncio.run(main())
