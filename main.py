@@ -1,10 +1,12 @@
 import argparse
 import asyncio
+import contextlib
+import io
 import os
-import subprocess
-import sys
+import traceback
 
 import kosong
+from kosong.chat_provider import ChatProvider
 from kosong.contrib.chat_provider.anthropic import Anthropic
 from kosong.contrib.chat_provider.google_genai import GoogleGenAI
 from kosong.contrib.chat_provider.openai_responses import OpenAIResponses
@@ -32,24 +34,40 @@ class RunPythonTool(CallableTool2[RunPythonParams]):
 
     async def __call__(self, params: RunPythonParams) -> ToolReturnValue:
         def run():
-            return subprocess.run(
-                [sys.executable, "-c", params.code],
-                capture_output=True,
-                text=True,
-            )
+            stdout_buf = io.StringIO()
+            stderr_buf = io.StringIO()
+            error = None
 
-        result = await asyncio.to_thread(run)
-        stdout_text = (result.stdout or "").strip()
-        stderr_text = (result.stderr or "").strip()
+            def spawn_agent(prompt: str) -> str:
+                return asyncio.run(run_agent(prompt))
 
-        if result.returncode != 0:
+            sandbox_globals = {
+                "__name__": "__main__",
+                "spawn_agent": spawn_agent,
+            }
+
+            try:
+                with (
+                    contextlib.redirect_stdout(stdout_buf),
+                    contextlib.redirect_stderr(stderr_buf),
+                ):
+                    exec(params.code, sandbox_globals, sandbox_globals)
+            except Exception:
+                error = traceback.format_exc()
+                stderr_buf.write(error)
+
+            return stdout_buf.getvalue(), stderr_buf.getvalue(), error
+
+        stdout_text, stderr_text, error = await asyncio.to_thread(run)
+
+        if error is not None:
             return ToolError(
-                message=f"Python exited with code {result.returncode}",
+                message="Python raised an exception",
                 brief="Python error",
-                output=stderr_text or stdout_text or "(no error output)",
+                output=(stderr_text or stdout_text or "(no error output)").strip(),
             )
 
-        return ToolOk(output=stdout_text or "(no output)")
+        return ToolOk(output=(stdout_text or "(no output)").strip())
 
 
 def parse_args():
@@ -87,7 +105,37 @@ def parse_args():
     return parser.parse_args(), model_configs
 
 
+PROVIDER: ChatProvider | None = None
+
+
+async def run_agent(prompt: str) -> str:
+    if PROVIDER is None:
+        return "ChatProvider not set"
+
+    history = [Message(role="user", content=prompt)]
+    toolset = SimpleToolset([RunPythonTool()])
+
+    while True:
+        result = await kosong.step(PROVIDER, "", toolset, history)
+        history.append(result.message)
+        tool_results = await result.tool_results()
+
+        if len(tool_results) == 0:
+            return result.message.extract_text()
+
+        tool_messages = [
+            Message(
+                role="tool",
+                content=tool_result.return_value.output,
+                tool_call_id=tool_result.tool_call_id,
+            )
+            for tool_result in tool_results
+        ]
+        history.extend(tool_messages)
+
+
 async def main():
+    global PROVIDER
     args, model_configs = parse_args()
     cwd = os.getcwd()
     console.print(
@@ -105,7 +153,7 @@ async def main():
     provider_cls, provider_kwargs = model_configs[args.model]
     if provider_cls is Anthropic:
         provider_kwargs = {**provider_kwargs, "default_max_tokens": args.max_tokens}
-    provider = provider_cls(model=args.model, **provider_kwargs)
+    PROVIDER = provider_cls(model=args.model, **provider_kwargs)
 
     toolset = SimpleToolset([RunPythonTool()])
     history = []
@@ -120,7 +168,7 @@ async def main():
         history.append(Message(role="user", content=user_message))
 
         while True:
-            result = await kosong.step(provider, "", toolset, history)
+            result = await kosong.step(PROVIDER, "", toolset, history)
             history.append(result.message)
             tool_results = await result.tool_results()
 
