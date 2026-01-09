@@ -18,6 +18,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.panel import Panel
+from rich.syntax import Syntax
 
 console = Console()
 SYSTEM_PROMPT = """You are a Recursor, a recursive coding agent. You are an instance of an intelligent problem solver connected to a Python REPL (the `run_python` tool).
@@ -29,8 +30,9 @@ You are a node in a tree of agents.
 Regardless of your position, your behavior is governed by the protocols below.
 
 # TOOLS
-* **Python REPL (`run_python`):** Executable environment for code, file reading, and data processing.
+* **Python REPL (`run_python`):** Executable environment for code, file reading, and data processing. Use `print()` to access values.
 * `spawn_agent(task_prompt: str) -> str`: A function available inside the REPL (i.e., within `run_python`) to create a child node. Returns the child's text output.
+> Note: `spawn_agent` is a BUILT-IN global function. Do not import it.
 
 # DECISION PROTOCOL: EXECUTE OR DELEGATE?
 
@@ -70,11 +72,22 @@ class RunPythonParams(BaseModel):
 
 class RunPythonTool(CallableTool2[RunPythonParams]):
     name = "run_python"
-    description = "Run a short Python snippet and return stdout/stderr."
+    description = (
+        "Run a short Python snippet and return stdout/stderr. "
+        "The environment has a pre-installed global function "
+        "`spawn_agent(task_prompt) -> str` that you must to delegate "
+        "complex sub-tasks."
+    )
     params = RunPythonParams
 
     async def __call__(self, params: RunPythonParams) -> ToolReturnValue:
-        console.print(Padding(f"Python: {params.one_line_description}", 1))
+        console.print(Padding(f"Python: {params.one_line_description}", (1, 1)))
+        console.print(
+            Padding(
+                Syntax(params.code, "python"),
+                (1, 1),
+            )
+        )
 
         def run():
             stdout_buf = io.StringIO()
@@ -82,7 +95,7 @@ class RunPythonTool(CallableTool2[RunPythonParams]):
             error = None
 
             def spawn_agent(prompt: str) -> str:
-                console.print(Padding(f"Spawn Agent: {prompt}", 1))
+                console.print(Padding(f"Spawn Agent: {prompt}", (0, 1)))
                 return asyncio.run(run_agent(prompt))
 
             sandbox_globals = {
@@ -189,7 +202,9 @@ async def main():
     args, model_configs = parse_args()
     if args.cwd is not None:
         if not os.path.isdir(args.cwd):
-            raise SystemExit(f"--cwd path does not exist or is not a directory: {args.cwd}")
+            raise SystemExit(
+                f"--cwd path does not exist or is not a directory: {args.cwd}"
+            )
         os.chdir(args.cwd)
     cwd = os.getcwd()
     console.print(
