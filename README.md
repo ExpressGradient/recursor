@@ -40,6 +40,9 @@ The CLI supports these model identifiers:
 
 Set the environment variables required by the provider(s) you plan to use (for example, an OpenAI / Anthropic / Google API key).
 
+Optional knobs:
+- `RECURSOR_SHOW_PYTHON_CODE=1` — echo the Python snippets sent to the REPL (helpful when debugging)
+
 If you use the provided `env.sh`, load it before running:
 
 ```bash

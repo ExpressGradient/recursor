@@ -3,6 +3,7 @@ import asyncio
 import contextlib
 import io
 import os
+import sys
 import traceback
 
 import kosong
@@ -21,6 +22,25 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 
 console = Console()
+LOG_CONSOLE = Console(file=sys.__stdout__)
+MODEL_CONFIGS = {
+    "claude-opus-4-5": (
+        Anthropic,
+        {},
+    ),
+    "gemini-3-pro-preview": (
+        GoogleGenAI,
+        {},
+    ),
+    "gpt-5.1-codex-max": (
+        OpenAIResponses,
+        {},
+    ),
+    "gpt-5.2": (
+        OpenAIResponses,
+        {},
+    ),
+}
 SYSTEM_PROMPT = """You are a Recursor, a recursive coding agent. You are an instance of an intelligent problem solver connected to a Python REPL (the `run_python` tool).
 
 # THE RECURSIVE ARCHITECTURE
@@ -81,13 +101,9 @@ class RunPythonTool(CallableTool2[RunPythonParams]):
     params = RunPythonParams
 
     async def __call__(self, params: RunPythonParams) -> ToolReturnValue:
-        console.print(Padding(f"Python: {params.one_line_description}", (1, 1)))
-        console.print(
-            Padding(
-                Syntax(params.code, "python"),
-                (1, 1),
-            )
-        )
+        LOG_CONSOLE.print(f"[bright_green]Python[/]: {params.one_line_description}")
+        if os.getenv("RECURSOR_SHOW_PYTHON_CODE") == "1":
+            LOG_CONSOLE.print(Syntax(params.code, "python"))
 
         def run():
             stdout_buf = io.StringIO()
@@ -95,7 +111,7 @@ class RunPythonTool(CallableTool2[RunPythonParams]):
             error = None
 
             def spawn_agent(prompt: str) -> str:
-                console.print(Padding(f"Spawn Agent: {prompt}", (0, 1)))
+                LOG_CONSOLE.print(f"[bright_cyan]Spawn Agent[/]: {prompt}")
                 return asyncio.run(run_agent(prompt))
 
             sandbox_globals = {
@@ -128,28 +144,10 @@ class RunPythonTool(CallableTool2[RunPythonParams]):
 
 
 def parse_args():
-    model_configs = {
-        "claude-opus-4-5": (
-            Anthropic,
-            {},
-        ),
-        "gemini-3-pro-preview": (
-            GoogleGenAI,
-            {},
-        ),
-        "gpt-5.1-codex-max": (
-            OpenAIResponses,
-            {},
-        ),
-        "gpt-5.2": (
-            OpenAIResponses,
-            {},
-        ),
-    }
     parser = argparse.ArgumentParser(description="Recursor")
     parser.add_argument(
         "--model",
-        choices=list(model_configs.keys()),
+        choices=list(MODEL_CONFIGS.keys()),
         default="gpt-5.1-codex-max",
         help="Model to use",
     )
@@ -165,7 +163,48 @@ def parse_args():
         default=None,
         help="Working directory to run the session from",
     )
-    return parser.parse_args(), model_configs
+    return parser.parse_args()
+
+
+def ensure_cwd(cwd: str | None) -> None:
+    if cwd is None:
+        return
+    if not os.path.isdir(cwd):
+        raise SystemExit(f"--cwd path does not exist or is not a directory: {cwd}")
+    os.chdir(cwd)
+
+
+def render_banner(model: str) -> None:
+    cwd = os.getcwd()
+    console.print(
+        Panel.fit(
+            Markdown(
+                f"**Recursor**\n"
+                f"- Model: `{model}`\n"
+                f"- Directory: `{cwd}`\n"
+                f"- Tip: type `quit` to exit"
+            ),
+            border_style="bright_black",
+        )
+    )
+
+
+def build_provider(model: str, max_tokens: int) -> ChatProvider:
+    provider_cls, provider_kwargs = MODEL_CONFIGS[model]
+    if provider_cls is Anthropic:
+        provider_kwargs = {**provider_kwargs, "default_max_tokens": max_tokens}
+    return provider_cls(model=model, **provider_kwargs)
+
+
+def tool_messages(tool_results: list) -> list[Message]:
+    return [
+        Message(
+            role="tool",
+            content=tool_result.return_value.output,
+            tool_call_id=tool_result.tool_call_id,
+        )
+        for tool_result in tool_results
+    ]
 
 
 PROVIDER: ChatProvider | None = None
@@ -186,43 +225,15 @@ async def run_agent(prompt: str) -> str:
         if len(tool_results) == 0:
             return result.message.extract_text()
 
-        tool_messages = [
-            Message(
-                role="tool",
-                content=tool_result.return_value.output,
-                tool_call_id=tool_result.tool_call_id,
-            )
-            for tool_result in tool_results
-        ]
-        history.extend(tool_messages)
+        history.extend(tool_messages(tool_results))
 
 
 async def main():
     global PROVIDER
-    args, model_configs = parse_args()
-    if args.cwd is not None:
-        if not os.path.isdir(args.cwd):
-            raise SystemExit(
-                f"--cwd path does not exist or is not a directory: {args.cwd}"
-            )
-        os.chdir(args.cwd)
-    cwd = os.getcwd()
-    console.print(
-        Panel.fit(
-            Markdown(
-                f"**Recursor**\n"
-                f"- Model: `{args.model}`\n"
-                f"- Directory: `{cwd}`\n"
-                f"- Tip: type `quit` to exit"
-            ),
-            border_style="bright_black",
-        )
-    )
-
-    provider_cls, provider_kwargs = model_configs[args.model]
-    if provider_cls is Anthropic:
-        provider_kwargs = {**provider_kwargs, "default_max_tokens": args.max_tokens}
-    PROVIDER = provider_cls(model=args.model, **provider_kwargs)
+    args = parse_args()
+    ensure_cwd(args.cwd)
+    render_banner(args.model)
+    PROVIDER = build_provider(args.model, args.max_tokens)
 
     toolset = SimpleToolset([RunPythonTool()])
     history = []
@@ -245,15 +256,7 @@ async def main():
                 console.print(Padding(Markdown(result.message.extract_text()), 1))
                 break
 
-            tool_messages = [
-                Message(
-                    role="tool",
-                    content=tool_result.return_value.output,
-                    tool_call_id=tool_result.tool_call_id,
-                )
-                for tool_result in tool_results
-            ]
-            history.extend(tool_messages)
+            history.extend(tool_messages(tool_results))
 
 
 asyncio.run(main())
