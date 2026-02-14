@@ -1,77 +1,104 @@
-# Recursor
+# recursor
 
-A small recursive coding agent CLI built on top of [`kosong`](https://pypi.org/project/kosong/) that can delegate work to a local Python REPL tool.
+A recursive coding agent CLI inspired by [Recursive Language Models](https://arxiv.org/abs/2512.24601). Instead of stuffing everything into a single LLM context, recursor decomposes tasks and delegates sub-problems to child agents — keeping each agent's context clean for orchestration.
 
-It runs an interactive chat loop and exposes a single tool:
+## How it works
 
-- **`run_python`**: execute short Python snippets (and optionally call `spawn_agent(...)` inside the REPL to delegate subtasks).
-
-## Requirements
-
-- Python **3.12+**
-- API credentials for the model provider you want to use (see *Configuration* below)
-
-## Install
-
-This repo is set up as a Python project (see `pyproject.toml`). Use whichever workflow you prefer:
-
-### Using `uv` (recommended)
-
-```bash
-uv sync
+```
+You: "Find and fix the bug in the auth module"
+      │
+      ▼
+  Root agent (depth 0) ── orchestrator
+      │  explores file structure
+      │  delegates via llm_query()
+      ├──▶ Sub-agent (depth 1) ── reads auth.py, finds the bug
+      ├──▶ Sub-agent (depth 1) ── reads tests, identifies failing case
+      │
+      ▼
+  Root agent synthesizes results and presents the fix
 ```
 
-### Using `pip`
+- **Root agents** plan and delegate via `llm_query()` / `llm_query_batched()` inside a Python REPL
+- **Leaf agents** (at max depth) execute directly — read files, write code, run commands
+- REPL output is truncated to force delegation over context stuffing
+- State persists across REPL calls within the same agent session
+
+## Installation
+
+Requires [uv](https://docs.astral.sh/uv/).
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
-pip install -e .
+uv tool install git+https://github.com/ExpressGradient/recursor.git
 ```
 
-## Configuration
+This installs `recursor` globally — run it from anywhere.
 
-The CLI supports these model identifiers:
-
-- `claude-opus-4-5` (Anthropic)
-- `gemini-3-pro-preview` (Google GenAI)
-- `gpt-5.1-codex-max` (OpenAI Responses) *(default)*
-- `gpt-5.2` (OpenAI Responses)
-
-Set the environment variables required by the provider(s) you plan to use (for example, an OpenAI / Anthropic / Google API key).
-
-Optional knobs:
-- `RECURSOR_SHOW_PYTHON_CODE=1` — echo the Python snippets sent to the REPL (helpful when debugging)
-
-If you use the provided `env.sh`, load it before running:
+To install from a local clone (editable, for development):
 
 ```bash
-source env.sh
+git clone https://github.com/ExpressGradient/recursor.git
+cd recursor
+uv tool install -e .
 ```
 
-## Run
+## Usage
 
-Start an interactive session:
+Set an API key for your provider:
 
 ```bash
-python main.py
+export OPENAI_API_KEY="..."
+# or
+export ANTHROPIC_API_KEY="..."
+# or
+export GOOGLE_API_KEY="..."
 ```
 
-Choose a model and/or working directory:
+Run:
 
 ```bash
-python main.py --model gpt-5.1-codex-max
-python main.py --cwd /path/to/project
-python main.py --model claude-opus-4-5 --max-tokens 2048
+recursor
 ```
 
-Type `quit` to exit.
+With options:
 
-## Notes
+```bash
+# specify model (format: provider/model)
+recursor --model openai/gpt-5.2-codex
 
-- The agent can execute Python via the `run_python` tool.
-- For larger tasks, the agent may call `spawn_agent(task_prompt)` from within the REPL to delegate subtasks.
+# deeper recursion
+recursor --model anthropic/claude-opus-4-5 --max-depth 2
 
-## License
+# point at a project directory
+recursor --cwd /path/to/project
+```
 
-See [LICENSE](LICENSE).
+Headless mode — run a single prompt and exit (scriptable, pipeable):
+
+```bash
+recursor --prompt "find all TODO comments in this project" --cwd /path/to/project
+```
+
+Exit interactive mode with `quit`, `exit`, or `q`.
+
+## CLI reference
+
+```
+recursor [OPTIONS]
+
+Options:
+  --model <provider/model>   Model to use (default: openai/gpt-5.2-codex)
+                             Providers: openai, anthropic, google, chat
+  --max-depth <int>          Max recursion depth (default: 1)
+  --max-tokens <int>         Max tokens for Anthropic models (default: 1024)
+  --cwd <path>               Working directory for the session
+  --prompt <string>          Run a single prompt headlessly and exit
+```
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `OPENAI_API_KEY` | API key for OpenAI models |
+| `ANTHROPIC_API_KEY` | API key for Anthropic models |
+| `GOOGLE_API_KEY` | API key for Google models |
+| `RECURSOR_SHOW_PYTHON_CODE` | Set to `1` to print executed Python snippets |

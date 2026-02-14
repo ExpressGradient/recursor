@@ -1,10 +1,20 @@
 [project]
 name = "recursor"
 version = "0.1.0"
-description = "Add your description here"
+description = "A recursive coding agent CLI built on Recursive Language Models"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "kosong[contrib]>=0.36.1",
     "rich>=14.2.0",
 ]
+
+[project.scripts]
+recursor = "recursor.main:cli"
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["recursor"]
